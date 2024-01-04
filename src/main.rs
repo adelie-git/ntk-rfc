@@ -1,5 +1,6 @@
 use clap::{Parser, ValueEnum};
 mod tftpd;
+mod ftpd;
 
 #[derive(Parser, Debug)]
 struct Cli {
@@ -9,7 +10,8 @@ struct Cli {
 
 #[derive(Debug, Clone, ValueEnum)]
 enum Protocol {
-    Tftp
+    Tftp,
+    Ftp
 }
 
 impl Cli {
@@ -18,6 +20,9 @@ impl Cli {
         match self.protocol {
             Tftp => {
                 tftpd::run();
+            },
+            Ftp => {
+                ftpd::run();
             }
         }
     }
