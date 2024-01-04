@@ -10,6 +10,8 @@
 
 - TFTP(RFC1350)
 
+- FTP(RFC959)
+
 ### Next Schedule
 
-- FTP(RFC959)
+- SYSLOG(RFC5424)
