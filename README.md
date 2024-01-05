@@ -12,6 +12,8 @@
 
 - FTP(RFC959)
 
+- SYSLOG(RFC5424)
+
 ### Next Schedule
 
-- SYSLOG(RFC5424)
+- SMTP(RFC5321)

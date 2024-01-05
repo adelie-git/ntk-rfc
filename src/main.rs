@@ -1,6 +1,7 @@
 use clap::{Parser, ValueEnum};
 mod tftpd;
 mod ftpd;
+mod syslogd;
 
 #[derive(Parser, Debug)]
 struct Cli {
@@ -11,7 +12,8 @@ struct Cli {
 #[derive(Debug, Clone, ValueEnum)]
 enum Protocol {
     Tftp,
-    Ftp
+    Ftp,
+    Syslog
 }
 
 impl Cli {
@@ -23,6 +25,9 @@ impl Cli {
             },
             Ftp => {
                 ftpd::run();
+            },
+            Syslog => {
+                syslogd::run();
             }
         }
     }
