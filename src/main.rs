@@ -1,7 +1,8 @@
 use clap::{Parser, ValueEnum};
-mod tftpd;
-mod ftpd;
-mod syslogd;
+mod tftp;
+mod ftp;
+mod syslog;
+mod smtp;
 
 #[derive(Parser, Debug)]
 struct Cli {
@@ -13,7 +14,8 @@ struct Cli {
 enum Protocol {
     Tftp,
     Ftp,
-    Syslog
+    Syslog,
+    Smtp
 }
 
 impl Cli {
@@ -21,13 +23,16 @@ impl Cli {
         use Protocol::*;
         match self.protocol {
             Tftp => {
-                tftpd::run();
+                tftp::tftpd::run();
             },
             Ftp => {
-                ftpd::run();
+                ftp::ftpd::run();
             },
             Syslog => {
-                syslogd::run();
+                syslog::syslogd::run();
+            },
+            Smtp => {
+                smtp::smtpd::run();
             }
         }
     }
