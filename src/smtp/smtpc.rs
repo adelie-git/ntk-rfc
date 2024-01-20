@@ -38,6 +38,7 @@ pub fn run() {
     let date = Local::now();
     let subject = "Test for SMTP";
     let contype = "text/plain; charset=us-ascii";
+    let conenc = "quoted-printable";
     let body = "This mail is test.";
     let mail_data_block = format!("\
                                         MIME-Version: {}\r\n\
@@ -46,9 +47,10 @@ pub fn run() {
                                         Date: {}\r\n\
                                         Subject: {}\r\n\
                                         Content-Type: {}\r\n\
-                                        {}\r\n\
+                                        Content-Transfer-Encoding: {}\r\n\r\n\
+                                        {}\r\n\r\n\
                                         .\r\n",
-                                         mime, mail_from, mail_to, date, subject, contype, body);
+                                         mime, mail_from, mail_to, date, subject, contype, conenc, body);
     write_and_read(&stream, mail_data_block, 10).unwrap();
 
     let mail_quit = String::from("QUIT\r\n");
