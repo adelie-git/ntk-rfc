@@ -1,3 +1,4 @@
+#[warn(dead_code)]
 use std::net::UdpSocket;
 
 #[derive(Debug)]
@@ -8,6 +9,7 @@ struct Syslog {
 }
 
 #[derive(Debug)]
+
 struct SyslogHeader {
     len: Option<u16>,
     pri: String,

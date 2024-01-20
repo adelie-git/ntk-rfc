@@ -32,7 +32,8 @@ impl Cli {
                 syslog::syslogd::run();
             },
             Smtp => {
-                smtp::smtpd::run();
+                smtp::smtpc::run();
+                //smtp::smtpd::run();
             }
         }
     }
