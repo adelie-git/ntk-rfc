@@ -1,4 +1,4 @@
-use std::{net::TcpStream, io::{Write, Read, self}, time::Duration};
+use std::{net::{TcpStream, Shutdown}, io::{Write, Read, self}, time::Duration};
 use chrono::Local;
 use windows::Win32::Networking::WinSock;
 use get_last_error::Win32Error;
@@ -56,7 +56,7 @@ pub fn run() {
     let mail_quit = String::from("QUIT\r\n");
     write_and_read(&stream, mail_quit, 3).unwrap();
 
-    stream.shutdown(std::net::Shutdown::Both).unwrap();
+    stream.shutdown(Shutdown::Both).unwrap();
 
 }
 

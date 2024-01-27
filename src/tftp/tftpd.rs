@@ -1,37 +1,33 @@
+use std::borrow::Borrow;
+use std::io;
 use std::io::{Read, Write};
 use std::net::{UdpSocket, SocketAddr};
 use std::str;
-use std::io;
-use std::path::{Path, PathBuf};
-use std::fs::File;
-use std::fs::create_dir;
+use std::path::PathBuf;
+use std::fs::{File, create_dir};
 use std::time::Duration;
 use dirs;
 use simplelog::*;
 use log::{self, LevelFilter};
 
-struct OpCode {}
-struct TftpLimit {}
-
-impl OpCode {
-    const NUL: u8 = 0;
-    const RRQ: u8 = 1;
-    const WRQ: u8 = 2;
-    const DATA: u8 = 3;
-    const ACK: u8 = 4;
-    const ERROR: u8 = 5;
-}
-
-impl TftpLimit {
-    const RETRY: i32 = 5;
-    const TIMEOUT: Option<Duration> = Some(Duration::new(5, 0));
-}
+const NUL: u8 = 0;
+const OP_RRQ: u8 = 1;
+const OP_WRQ: u8 = 2;
+const OP_DATA: u8 = 3;
+const OP_ACK: u8 = 4;
+const OP_ERROR: u8 = 5;
+const MAX_RETRY: i32 = 5;
+const TIMEOUT: Option<Duration> = Some(Duration::new(5, 0));
 
 /// Support only RFC1350
 pub fn run() {
-    let tftp_root: PathBuf = dirs::desktop_dir().unwrap().join("tftp-root");
+    let tftp_root = dirs::desktop_dir().unwrap().join("tftp-root");
     let logfile = tftp_root.join("tftp_server.log");
     let socket = UdpSocket::bind("127.0.0.1:69").expect("Binding to 127.0.0.1:69 failed.");
+
+    if !tftp_root.exists() {
+        create_dir(&tftp_root).expect("Could not create directory.");
+    }
 
     let _ = CombinedLogger::init(
         vec![
@@ -39,10 +35,6 @@ pub fn run() {
             WriteLogger::new(LevelFilter::Info, Config::default(), File::create(logfile).unwrap())
             ]
     );
-
-    if !tftp_root.exists() {
-        create_dir(&tftp_root).expect("Could not create directory.");
-    }
 
     loop {
         // Client's first request packet.
@@ -52,60 +44,63 @@ pub fn run() {
         match socket.recv_from(&mut accept_buf) {
             Ok((byte_size, src_addr)) => {
                 let recv_buf = &mut accept_buf[..byte_size];
-                let first_byte = &recv_buf[0];
                 let opcode = &recv_buf[1];
 
                 // The first byte must be 0x00.
                 // The second byte is opcode, and the first opcode must be 0x01 or 0x02.
-                if first_byte != &OpCode::NUL && opcode != &OpCode::RRQ && opcode != &OpCode::WRQ {
+                if &recv_buf[0] != &NUL && (opcode != &OP_RRQ || opcode != &OP_WRQ) {
                     log::debug!("Receving invalid packet: {:?}", &recv_buf);
                     log::debug!("Ignore this packet and wait again.");
                     continue
                 }
 
-                let iter = &mut recv_buf[2..].split(|num| num == &0u8);
-                let filename = match iter.next() {
-                    Some(byte) => {
-                        log::debug!("filename: {:?}", str::from_utf8(byte).unwrap());
-                        str::from_utf8(byte).unwrap()
-                    },
-                    None => {
-                        log::debug!("Receving invalid packet: {:?}", &recv_buf);
-                        log::debug!("Ignore this packet and wait again.");
-                        continue                       
-                    }
-                };
-                let mode = match iter.next() {
-                    Some(byte) => {
-                        log::debug!("mode: {:?}", str::from_utf8(byte).unwrap());
-                        str::from_utf8(byte).unwrap().to_lowercase()
-                    },
-                    None => {
-                        log::debug!("Receving invalid packet: {:?}", &recv_buf);
-                        log::debug!("Ignore this packet and wait again.");
-                        continue
-                    }
-                };
-
-                // Mail mode is not available.
-                if mode == "mail" {
-                    let msg = String::from("Mail mode is not available.");
-                    let err_buf = build_err_packet(4u8, msg);
-                    socket.send_to(&err_buf, src_addr).unwrap();
-                    log::debug!("Receving require mail mode packet: {:?}", &recv_buf);
-                    log::debug!("Send error packet and wait again.");
+                let iter = &mut recv_buf[2..recv_buf.len()-1].split(|num| num == &NUL);
+                let citer = &mut recv_buf[2..recv_buf.len()-1].split(|num| num == &NUL);
+                if citer.count() != 2usize {
+                    log::debug!("Receving invalid packet: {:?}", &recv_buf);
+                    log::debug!("Ignore this packet and wait again.");
                     continue
                 }
 
+                let filename = str::from_utf8(iter.next().unwrap()).unwrap();
                 let path = tftp_root.join(filename);
-                let path = path.as_path();
+                log::debug!("filename: {:?}", filename);
 
+                let mode = str::from_utf8(iter.next().unwrap()).unwrap().to_lowercase();
+                let mode = mode.as_str();
+                log::debug!("mode: {:?}", mode);
+
+                match mode {
+                    "netascii" | "octet" => (),
+                    "mail" => {
+                        // Mail mode is not available.
+                        let err_buf = build_err_packet(4u8, "Mail mode is not available.");
+                        if let Err(e) = socket.send_to(&err_buf, src_addr) {
+                            log::error!("Failed to send: {:?}", e);
+                        }
+                        log::debug!("Receving require mail mode packet: {:?}", &recv_buf);
+                        log::debug!("Send error packet and wait again.");
+                        continue
+                    }
+                    _ => {
+                        // Expect netascii, octet and mail. 
+                        let err_buf = build_err_packet(4u8, "Invalid mode.");
+                        if let Err(e) = socket.send_to(&err_buf, src_addr) {
+                            log::error!("Failed to send: {:?}", e);
+                        }
+                        log::debug!("Receving require invalid mode packet: {:?}", &recv_buf);
+                        log::debug!("Send error packet and wait again.");
+                        continue
+                    }
+                }
+                
                 match opcode {
-                    &OpCode::RRQ => {
+                    &OP_RRQ => {
                         if !path.exists() || !path.is_file() {
-                            let msg = String::from("Request file not found.");
-                            let err_buf = build_err_packet(1u8, msg);
-                            socket.send_to(&err_buf, src_addr).unwrap();
+                            let err_buf = build_err_packet(1u8, "Request file not found.");
+                            if let Err(e) = socket.send_to(&err_buf, src_addr) {
+                                log::error!("[RRQ]Failed to send: {:?}", e);
+                            }
                             log::debug!("[RRQ]Receving require non-existing file packet: {:?}", &recv_buf);
                             log::debug!("[RRQ]Send error packet and wait again.");
                             continue
@@ -114,11 +109,12 @@ pub fn run() {
                             log::error!("[RRQ]Failed to process:{:?}", e);
                         };
                     },
-                    &OpCode::WRQ => {
+                    &OP_WRQ => {
                         if path.exists() {
-                            let msg = String::from("Request file already existed.");
-                            let err_buf = build_err_packet(6u8, msg);
-                            socket.send_to(&err_buf, src_addr).unwrap();
+                            let err_buf = build_err_packet(6u8, "Request file already existed.");
+                            if let Err(e) = socket.send_to(&err_buf, src_addr) {
+                                log::error!("[WRQ]Failed to send: {:?}", e);
+                            }
                             log::debug!("[WRQ]Receving require existing file packet: {:?}", &recv_buf);
                             log::debug!("[WRQ]Send error packet and wait again.");
                             continue
@@ -140,21 +136,18 @@ pub fn run() {
     }
 }
 
-fn rrq_packet(client_addr: SocketAddr, path: &Path, mode: String) -> io::Result<()> {
+fn rrq_packet(client_addr: SocketAddr, path: PathBuf, mode: &str) -> io::Result<()> {
     let mut file_buf = Vec::new();
     let mut data_packet = Vec::new();
-
     log::info!("[RRQ]Process start.");
     
-    match mode.as_str() {
+    match mode {
         // Convert to 0x64(@) if it is not ascii character.
         // Also, if 0x13(CR) is not followed by 0x10(LF) or 0x00(NUL), add 0x10(LF).
         "netascii" => {
             let mut buf = Vec::new();
             File::open(&path)?.read_to_end(&mut buf)?;
-            let mut conv_buf = buf.into_iter()
-                                                            .map(|x| if x.is_ascii() { x } else { 64u8 })
-                                                            .peekable();
+            let mut conv_buf = buf.into_iter().map(|x| if x.is_ascii() { x } else { 64u8 }).peekable();
             while let Some(v) = conv_buf.next() {
                 file_buf.push(v);
                 if v == 13u8 {
@@ -176,14 +169,13 @@ fn rrq_packet(client_addr: SocketAddr, path: &Path, mode: String) -> io::Result<
         }
     }
     
-    let mut buf_iter = file_buf.chunks(512usize).collect::<Vec<&[u8]>>()
-                                                                .clone().into_iter().enumerate();
+    let mut buf_iter = file_buf.chunks(512usize).collect::<Vec<&[u8]>>().clone().into_iter().enumerate();
 
     loop {
         match buf_iter.next() {
             Some((mut i, v)) => {
                 i = i + 1;
-                let mut packet = vec![OpCode::NUL , OpCode::DATA];
+                let mut packet = vec![NUL , OP_DATA];
                 packet.extend((i as u16).to_be_bytes());
                 packet.extend(v);
                 data_packet.push(packet)
@@ -191,7 +183,7 @@ fn rrq_packet(client_addr: SocketAddr, path: &Path, mode: String) -> io::Result<
             None => {
                 let buf_size = file_buf.len();
                 if buf_size % 512 == 0 {
-                    let mut packet = vec![OpCode::NUL , OpCode::DATA];
+                    let mut packet = vec![NUL , OP_DATA];
                     let block = (buf_size / 512 + 1) as u16; 
                     packet.extend(block.to_be_bytes());
                     packet.push(0u8);
@@ -211,7 +203,7 @@ fn rrq_packet(client_addr: SocketAddr, path: &Path, mode: String) -> io::Result<
             Some(packet) => {
                 let mut retry_count = 0;
                 let mut buf = [0; 4];
-                while retry_count < TftpLimit::RETRY {
+                while retry_count < MAX_RETRY {
                     match socket.send(&packet) {
                         Ok(byte_size) => {
                             log::debug!("byte: {:?}", byte_size)
@@ -223,13 +215,13 @@ fn rrq_packet(client_addr: SocketAddr, path: &Path, mode: String) -> io::Result<
                         }
                     };
 
-                    match socket.set_read_timeout(TftpLimit::TIMEOUT) {
+                    match socket.set_read_timeout(TIMEOUT) {
                         Ok(_) => {
                             match socket.recv(&mut buf) {
                                 Ok(byte_size) => {
                                     let recv_packet = &buf[..byte_size];
                                     log::debug!("received {byte_size} bytes {:?}", recv_packet);
-                                    if recv_packet[1] == OpCode::ACK && recv_packet[2..4] == packet[2..4] {
+                                    if recv_packet[1] == OP_ACK && recv_packet[2..4] == packet[2..4] {
                                         break;
                                     }
                                     retry_count += 1;
@@ -248,7 +240,7 @@ fn rrq_packet(client_addr: SocketAddr, path: &Path, mode: String) -> io::Result<
                         }
                     }
                 }
-                if retry_count >= TftpLimit::RETRY {
+                if retry_count >= MAX_RETRY {
                     return Err(io::Error::new(io::ErrorKind::NotConnected,
                          "The maximum number of retries has been reached."))
                 }
@@ -256,13 +248,13 @@ fn rrq_packet(client_addr: SocketAddr, path: &Path, mode: String) -> io::Result<
             None => break
         }
     }
-    log::info!("[RRQ]Process completed!.");
+    log::info!("[RRQ]Process completed!");
     Ok(())
 }
 
-fn wrq_packet(client_addr: SocketAddr, path: &Path) -> io::Result<()> {
+fn wrq_packet(client_addr: SocketAddr, path: PathBuf) -> io::Result<()> {
     let mut file_buf: Vec<u8> = Vec::new();
-    let mut ack_buf = vec![OpCode::NUL, OpCode::ACK];
+    let mut ack_buf = vec![NUL, OP_ACK];
     let mut ack = 1u16;
 
     let socket = UdpSocket::bind("127.0.0.1:0").unwrap();
@@ -279,14 +271,14 @@ fn wrq_packet(client_addr: SocketAddr, path: &Path) -> io::Result<()> {
 
     loop {
         let mut retry_count = 0;
-        match socket.set_read_timeout(TftpLimit::TIMEOUT) {
+        match socket.set_read_timeout(TIMEOUT) {
             Ok(_) => {
                 let mut buf = vec![0; 516];
                 match socket.recv(&mut buf) {
                     Ok(byte_size) => {
                         let recv_packet = &buf[..byte_size];
                         log::debug!("received {byte_size} bytes {:?}", recv_packet);
-                        if recv_packet[1] == OpCode::DATA && recv_packet[2..4] == ack.to_be_bytes() {
+                        if recv_packet[1] == OP_DATA && recv_packet[2..4] == ack.to_be_bytes() {
                             ack_buf.extend(ack.to_be_bytes());
                             match socket.send(&ack_buf) {
                                 Ok(_) => {
@@ -318,7 +310,7 @@ fn wrq_packet(client_addr: SocketAddr, path: &Path) -> io::Result<()> {
                 retry_count += 1;
             }
         };
-        if retry_count >= TftpLimit::RETRY {
+        if retry_count >= MAX_RETRY {
             return Err(io::Error::new(io::ErrorKind::NotConnected,
                     "The maximum number of retries has been reached."))
         }
@@ -328,10 +320,10 @@ fn wrq_packet(client_addr: SocketAddr, path: &Path) -> io::Result<()> {
     Ok(())
 }
 
-fn build_err_packet(code: u8, msg: String) -> Vec<u8> {
-    let mut packet = vec![OpCode::NUL, OpCode::ERROR, 0u8];
+fn build_err_packet(code: u8, msg: &str) -> Vec<u8> {
+    let mut packet = vec![NUL, OP_ERROR, NUL];
     packet.push(code);
-    packet.extend(msg.into_bytes());
-    packet.push(0u8);
+    packet.extend(msg.as_bytes());
+    packet.push(NUL);
     packet
 }
